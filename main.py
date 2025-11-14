@@ -202,11 +202,24 @@ async def websocket_proxy(websocket: WebSocket):
 async def get_deepgram_url():
     """
     Returns the WebSocket URL for our proxy endpoint.
-    Frontend should connect to ws://localhost:4000/ws/deepgram instead of directly to Deepgram.
+    Frontend should connect to our backend WebSocket endpoint, which proxies to Deepgram.
     """
-    # Return our proxy WebSocket URL instead of Deepgram's URL
-    # Frontend will connect to our backend, which proxies to Deepgram
-    proxy_url = "ws://localhost:4000/ws/deepgram"
+    # Get the backend URL from environment or use localhost for development
+    backend_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("BACKEND_URL") or "http://localhost:4000"
+    
+    # Convert HTTP/HTTPS to WebSocket URL
+    if backend_url.startswith("https://"):
+        ws_url = backend_url.replace("https://", "wss://")
+    elif backend_url.startswith("http://"):
+        ws_url = backend_url.replace("http://", "ws://")
+    else:
+        # If no protocol, assume HTTPS in production
+        if "localhost" in backend_url or "127.0.0.1" in backend_url:
+            ws_url = "ws://" + backend_url
+        else:
+            ws_url = "wss://" + backend_url
+    
+    proxy_url = f"{ws_url}/ws/deepgram"
     
     return DeepgramURLResponse(url=proxy_url, token=None)
 
