@@ -49,17 +49,9 @@ class DeepgramURLResponse(BaseModel):
 hf_client = None
 hf_api_key = os.getenv("HUGGINGFACE_API_KEY")
 if hf_api_key:
-    try:
-        # Try to use the new inference router endpoint
-        # The base_url should point to the router endpoint
-        hf_client = InferenceClient(
-            token=hf_api_key,
-            base_url="https://router.huggingface.co"
-        )
-    except Exception as e:
-        print(f"Error initializing HF client with router endpoint: {e}")
-        # Fallback to default (should work with newer library versions)
-        hf_client = InferenceClient(token=hf_api_key)
+    # Initialize with API key - newer versions of huggingface-hub (>=0.28.0)
+    # should automatically use the new router endpoint
+    hf_client = InferenceClient(token=hf_api_key)
 
 # Sentiment analysis model
 SENTIMENT_MODEL = "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
@@ -317,33 +309,8 @@ async def process_text(request: ProcessTextRequest):
                 print(f"HF Client initialized: {hf_client is not None}")
             
             # Call the text classification model for sentiment analysis
-            # Use the new inference router endpoint
-            # Format: https://router.huggingface.co/hf-inference/models/{model_name}
-            inference_url = f"https://router.huggingface.co/hf-inference/models/{model_name}"
-            
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    inference_url,
-                    headers={
-                        "Authorization": f"Bearer {hf_api_key}",
-                        "Content-Type": "application/json"
-                    },
-                    json={"inputs": request.text}
-                )
-                response.raise_for_status()
-                result_data = response.json()
-                
-                # The new API returns a list of lists, where each inner list contains dicts with 'label' and 'score'
-                # Format: [[{"label": "POSITIVE", "score": 0.99}, {"label": "NEGATIVE", "score": 0.01}]]
-                if isinstance(result_data, list):
-                    if len(result_data) > 0 and isinstance(result_data[0], list):
-                        # Nested list format
-                        result = result_data[0]
-                    else:
-                        # Direct list format
-                        result = result_data
-                else:
-                    result = [result_data] if isinstance(result_data, dict) else result_data
+            # Use InferenceClient - newer versions (>=0.28.0) should handle the router endpoint automatically
+            result = hf_client.text_classification(request.text, model=model_name)
             break  # Success, exit retry loop
             
         except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.RequestError, Exception) as e:
