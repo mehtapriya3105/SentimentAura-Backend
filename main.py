@@ -49,7 +49,17 @@ class DeepgramURLResponse(BaseModel):
 hf_client = None
 hf_api_key = os.getenv("HUGGINGFACE_API_KEY")
 if hf_api_key:
-    hf_client = InferenceClient(token=hf_api_key)
+    try:
+        # Try to use the new inference router endpoint
+        # The base_url should point to the router endpoint
+        hf_client = InferenceClient(
+            token=hf_api_key,
+            base_url="https://router.huggingface.co"
+        )
+    except Exception as e:
+        print(f"Error initializing HF client with router endpoint: {e}")
+        # Fallback to default (should work with newer library versions)
+        hf_client = InferenceClient(token=hf_api_key)
 
 # Sentiment analysis model
 SENTIMENT_MODEL = "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
@@ -307,10 +317,36 @@ async def process_text(request: ProcessTextRequest):
                 print(f"HF Client initialized: {hf_client is not None}")
             
             # Call the text classification model for sentiment analysis
-            result = hf_client.text_classification(request.text, model=model_name)
+            # Use the new inference router endpoint
+            # Format: https://router.huggingface.co/hf-inference/models/{model_name}
+            inference_url = f"https://router.huggingface.co/hf-inference/models/{model_name}"
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    inference_url,
+                    headers={
+                        "Authorization": f"Bearer {hf_api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json={"inputs": request.text}
+                )
+                response.raise_for_status()
+                result_data = response.json()
+                
+                # The new API returns a list of lists, where each inner list contains dicts with 'label' and 'score'
+                # Format: [[{"label": "POSITIVE", "score": 0.99}, {"label": "NEGATIVE", "score": 0.01}]]
+                if isinstance(result_data, list):
+                    if len(result_data) > 0 and isinstance(result_data[0], list):
+                        # Nested list format
+                        result = result_data[0]
+                    else:
+                        # Direct list format
+                        result = result_data
+                else:
+                    result = [result_data] if isinstance(result_data, dict) else result_data
             break  # Success, exit retry loop
             
-        except (HfHubHTTPError, httpx.HTTPStatusError, httpx.TimeoutException) as e:
+        except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.RequestError, Exception) as e:
             last_error = e
             error_msg = str(e)
             
@@ -347,18 +383,26 @@ async def process_text(request: ProcessTextRequest):
     try:
         print(f"Result: {result}")
         print(f"Result type: {type(result)}")
-        print(f"Result length: {len(result)}")
-        print(f"Result[0]: {result[0]}")
-        print(f"Result[0].label: {result[0].label}")
-        print(f"Result[0].score: {result[0].score}")
         
-        # The model returns a list of TextClassificationOutputElement objects with 'label' and 'score'
-        # DistilBERT model typically returns: 'POSITIVE' and 'NEGATIVE' labels with confidence scores
+        # Handle the new API response format
+        # The new API returns a list of dictionaries with 'label' and 'score' keys
         if isinstance(result, list) and len(result) > 0:
             # Find the label with the highest score (most confident prediction)
-            best_result = max(result, key=lambda x: x.score if hasattr(x, 'score') else 0)
-            label = best_result.label.upper() if hasattr(best_result, 'label') else str(best_result).upper()
-            score = best_result.score if hasattr(best_result, 'score') else 0
+            if isinstance(result[0], dict):
+                # New API format: list of dicts with 'label' and 'score'
+                best_result = max(result, key=lambda x: x.get('score', 0))
+                label = best_result.get('label', '').upper()
+                score = best_result.get('score', 0)
+            elif hasattr(result[0], 'label') and hasattr(result[0], 'score'):
+                # Old InferenceClient format: objects with label and score attributes
+                best_result = max(result, key=lambda x: x.score if hasattr(x, 'score') else 0)
+                label = best_result.label.upper() if hasattr(best_result, 'label') else str(best_result).upper()
+                score = best_result.score if hasattr(best_result, 'score') else 0
+            else:
+                # Fallback: try to extract from string representation
+                best_result = max(result, key=lambda x: x.get('score', 0) if isinstance(x, dict) else 0)
+                label = str(best_result).upper()
+                score = 0.5
             
             # Convert label to sentiment score (-1 to 1) with 5 categories
             # Using confidence score to determine intensity:
