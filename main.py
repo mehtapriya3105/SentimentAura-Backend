@@ -349,7 +349,11 @@ Do not include any other text, only the JSON object. The keywords array should c
             
             # Parse the response
             response_text = response.choices[0].message.content.strip()
-            print(f"Groq response: {response_text}")
+            print("=" * 80)
+            print("GROQ API RESPONSE:")
+            print("=" * 80)
+            print(f"Full response text: {response_text}")
+            print("=" * 80)
             
             # Extract JSON from response (handle cases where there might be extra text)
             import json
@@ -363,10 +367,15 @@ Do not include any other text, only the JSON object. The keywords array should c
                     response_text = response_text.split("```")[1].split("```")[0].strip()
                 
                 result = json.loads(response_text)
+                print(f"Parsed JSON result: {result}")
+                
                 sentiment = float(result.get("sentiment", 0.0))
+                print(f"Extracted sentiment: {sentiment}")
                 
                 # Extract keywords from response
                 keywords_raw = result.get("keywords", [])
+                print(f"Raw keywords from Groq: {keywords_raw}")
+                
                 if isinstance(keywords_raw, list):
                     # Clean and validate keywords
                     keywords = [
@@ -374,12 +383,17 @@ Do not include any other text, only the JSON object. The keywords array should c
                         for k in keywords_raw 
                         if k and len(str(k).strip()) >= 3
                     ][:8]  # Limit to 8 keywords
+                    print(f"Cleaned and validated keywords: {keywords}")
                 else:
                     # Fallback: try to extract keywords from string
                     keywords = []
+                    print(f"Warning: keywords_raw is not a list, type: {type(keywords_raw)}")
                 
                 # Clamp sentiment to -1 to 1 range
                 sentiment = max(-1.0, min(1.0, sentiment))
+                print(f"Final sentiment (clamped): {sentiment}")
+                print(f"Final keywords: {keywords}")
+                print("=" * 80)
                 
             except json.JSONDecodeError:
                 # If JSON parsing fails, try to extract number from response
