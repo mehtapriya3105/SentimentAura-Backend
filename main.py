@@ -23,24 +23,14 @@ else:
 app = FastAPI(title="Sentiment Aura API", version="1.0.0")
 
 # CORS middleware to allow frontend connections
-# Get allowed origins from environment or allow all
-allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
-if allowed_origins_env:
-    # Parse comma-separated origins from environment variable
-    allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",")]
-    # If credentials are needed, set allow_credentials=True
-    allow_creds = os.getenv("CORS_ALLOW_CREDENTIALS", "false").lower() == "true"
-else:
-    # Allow all origins (works when allow_credentials=False)
-    allowed_origins = ["*"]
-    allow_creds = False
-
+# IMPORTANT: Must be added before routes are defined
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=allow_creds,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=False,  # Must be False when using ["*"]
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
+    expose_headers=["*"],  # Expose all headers
 )
 
 # Request/Response models
@@ -71,6 +61,20 @@ async def root():
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+@app.options("/{full_path:path}")
+async def options_handler(full_path: str):
+    """Handle OPTIONS requests for CORS preflight"""
+    return {"message": "OK"}
+
+@app.get("/api/cors-test")
+async def cors_test():
+    """Test endpoint to verify CORS is working"""
+    return {
+        "message": "CORS is working!",
+        "origin_allowed": True,
+        "cors_configured": True
+    }
 
 @app.get("/api/debug/deepgram-key")
 async def debug_deepgram_key():
