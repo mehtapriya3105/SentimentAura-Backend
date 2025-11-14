@@ -307,38 +307,44 @@ async def process_text(request: ProcessTextRequest):
     retry_delays = [2, 4, 8]  # seconds to wait between retries
     
     sentiment = 0.0
+    keywords = []  # Initialize keywords list
     last_error = None
     
     for attempt in range(max_retries):
         try:
             if attempt == 0:
-                print(f"Using Groq API for sentiment analysis")
+                print(f"Using Groq API for sentiment analysis and keyword extraction")
                 print(f"Groq Client initialized: {groq_client is not None}")
             
-            # Create a prompt for Groq to analyze sentiment
-            prompt = f"""Analyze the sentiment of the following text and provide a sentiment score between -1 and 1, where:
-- -1.0 to -0.6 = Very Negative
-- -0.6 to -0.2 = Negative  
-- -0.2 to 0.2 = Neutral
-- 0.2 to 0.6 = Positive
-- 0.6 to 1.0 = Very Positive
+            # Create a prompt for Groq to analyze sentiment and extract keywords
+            prompt = f"""Analyze the sentiment of the following text and extract the most important keywords.
 
 Text: "{request.text}"
 
-Respond with ONLY a JSON object in this exact format:
-{{"sentiment": <number between -1 and 1>}}
+Provide:
+1. A sentiment score between -1 and 1, where:
+   - -1.0 to -0.6 = Very Negative
+   - -0.6 to -0.2 = Negative  
+   - -0.2 to 0.2 = Neutral
+   - 0.2 to 0.6 = Positive
+   - 0.6 to 1.0 = Very Positive
 
-Do not include any other text, only the JSON object."""
+2. A list of 5-8 most important keywords that capture the main topics, themes, or concepts in the text. Focus on meaningful, substantive words that represent key ideas, not common words like "the", "and", "is", etc.
+
+Respond with ONLY a JSON object in this exact format:
+{{"sentiment": <number between -1 and 1>, "keywords": ["keyword1", "keyword2", "keyword3", ...]}}
+
+Do not include any other text, only the JSON object. The keywords array should contain 5-8 strings."""
 
             # Call Groq API
             response = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[
-                    {"role": "system", "content": "You are a sentiment analysis expert. Always respond with valid JSON only."},
+                    {"role": "system", "content": "You are a sentiment analysis and keyword extraction expert. Always respond with valid JSON only. Extract meaningful, substantive keywords that represent key topics and themes."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,
-                max_tokens=50
+                max_tokens=150  # Increased for keywords
             )
             
             # Parse the response
@@ -347,6 +353,7 @@ Do not include any other text, only the JSON object."""
             
             # Extract JSON from response (handle cases where there might be extra text)
             import json
+            
             # Try to find JSON in the response
             try:
                 # Remove markdown code blocks if present
@@ -357,6 +364,19 @@ Do not include any other text, only the JSON object."""
                 
                 result = json.loads(response_text)
                 sentiment = float(result.get("sentiment", 0.0))
+                
+                # Extract keywords from response
+                keywords_raw = result.get("keywords", [])
+                if isinstance(keywords_raw, list):
+                    # Clean and validate keywords
+                    keywords = [
+                        str(k).strip().lower() 
+                        for k in keywords_raw 
+                        if k and len(str(k).strip()) >= 3
+                    ][:8]  # Limit to 8 keywords
+                else:
+                    # Fallback: try to extract keywords from string
+                    keywords = []
                 
                 # Clamp sentiment to -1 to 1 range
                 sentiment = max(-1.0, min(1.0, sentiment))
@@ -370,6 +390,8 @@ Do not include any other text, only the JSON object."""
                     sentiment = max(-1.0, min(1.0, sentiment))
                 else:
                     raise ValueError(f"Could not parse sentiment from response: {response_text}")
+                # If JSON parsing fails, use local NLP as fallback
+                keywords = extract_keywords(request.text)
             
             break  # Success, exit retry loop
             
@@ -408,8 +430,14 @@ Do not include any other text, only the JSON object."""
         # Ensure sentiment is in range [-1, 1]
         sentiment = max(-1.0, min(1.0, sentiment))
         
-        # Extract keywords from the text
-        keywords = extract_keywords(request.text)
+        # If keywords weren't extracted from Groq (fallback case), use local NLP
+        if not keywords:
+            print("Warning: No keywords from Groq, using local NLP fallback")
+            keywords = extract_keywords(request.text)
+        
+        # Ensure we have keywords (at least empty list)
+        if not keywords:
+            keywords = []
         
         return ProcessTextResponse(sentiment=sentiment, keywords=keywords)
         
