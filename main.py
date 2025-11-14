@@ -23,10 +23,22 @@ else:
 app = FastAPI(title="Sentiment Aura API", version="1.0.0")
 
 # CORS middleware to allow frontend connections
+# Get allowed origins from environment or allow all
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+if allowed_origins_env:
+    # Parse comma-separated origins from environment variable
+    allowed_origins = [origin.strip() for origin in allowed_origins_env.split(",")]
+    # If credentials are needed, set allow_credentials=True
+    allow_creds = os.getenv("CORS_ALLOW_CREDENTIALS", "false").lower() == "true"
+else:
+    # Allow all origins (works when allow_credentials=False)
+    allowed_origins = ["*"]
+    allow_creds = False
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=allow_creds,
     allow_methods=["*"],
     allow_headers=["*"],
 )
