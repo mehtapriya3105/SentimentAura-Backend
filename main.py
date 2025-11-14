@@ -6,11 +6,13 @@ from typing import List, Optional
 from dotenv import load_dotenv
 import asyncio
 import websockets
-from huggingface_hub import InferenceClient
+from groq import Groq
 import re
 import httpx
 import uvicorn
-from huggingface_hub.errors import HfHubHTTPError
+# Hugging Face imports commented out - using Groq instead
+# from huggingface_hub import InferenceClient
+# from huggingface_hub.errors import HfHubHTTPError
 # Load environment variables from .env or env file
 # Try .env first (standard), then fall back to 'env' file
 if os.path.exists(".env"):
@@ -45,16 +47,26 @@ class DeepgramURLResponse(BaseModel):
     url: str
     token: Optional[str] = None
 
-# Initialize Hugging Face Inference client
-hf_client = None
-hf_api_key = os.getenv("HUGGINGFACE_API_KEY")
-if hf_api_key:
-    # Initialize with API key - newer versions of huggingface-hub (>=0.28.0)
-    # should automatically use the new router endpoint
-    hf_client = InferenceClient(token=hf_api_key)
+# Initialize Groq client for sentiment analysis
+groq_client = None
+groq_api_key = os.getenv("GROQ_API_KEY")
+if groq_api_key:
+    groq_client = Groq(api_key=groq_api_key)
+    print("Groq client initialized successfully")
+else:
+    print("Warning: GROQ_API_KEY not found in environment variables")
 
-# Sentiment analysis model
-SENTIMENT_MODEL = "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
+# Hugging Face code commented out - using Groq instead
+# # Initialize Hugging Face Inference client
+# hf_client = None
+# hf_api_key = os.getenv("HUGGINGFACE_API_KEY")
+# if hf_api_key:
+#     # Initialize with API key - newer versions of huggingface-hub (>=0.28.0)
+#     # should automatically use the new router endpoint
+#     hf_client = InferenceClient(token=hf_api_key)
+# 
+# # Sentiment analysis model
+# SENTIMENT_MODEL = "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
 
 @app.get("/")
 async def root():
@@ -278,42 +290,90 @@ def extract_keywords(text: str, max_keywords: int = 8) -> List[str]:
 @app.post("/process_text", response_model=ProcessTextResponse)
 async def process_text(request: ProcessTextRequest):
     """
-    Processes text to extract sentiment and keywords using Hugging Face API.
+    Processes text to extract sentiment and keywords using Groq API.
     Returns sentiment score (-1 to 1) and list of keywords.
     """
     if not request.text or not request.text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty")
     
-    if not hf_client:
+    if not groq_client:
         raise HTTPException(
             status_code=500,
-            detail="HUGGINGFACE_API_KEY not configured. Please set it in your environment variables."
+            detail="GROQ_API_KEY not configured. Please set it in your environment variables."
         )
-    
-    # Use Hugging Face Inference API for sentiment analysis
-    model_name = "distilbert/distilbert-base-uncased-finetuned-sst-2-english"
     
     # Retry logic with exponential backoff for timeout errors
     max_retries = 3
     retry_delays = [2, 4, 8]  # seconds to wait between retries
     
-    result = None
+    sentiment = 0.0
     last_error = None
     
     for attempt in range(max_retries):
         try:
-            # Verify we're using Hugging Face, noimage.png
-            #t OpenAI
             if attempt == 0:
-                print(f"Using Hugging Face model: {model_name}")
-                print(f"HF Client initialized: {hf_client is not None}")
+                print(f"Using Groq API for sentiment analysis")
+                print(f"Groq Client initialized: {groq_client is not None}")
             
-            # Call the text classification model for sentiment analysis
-            # Use InferenceClient - newer versions (>=0.28.0) should handle the router endpoint automatically
-            result = hf_client.text_classification(request.text, model=model_name)
+            # Create a prompt for Groq to analyze sentiment
+            prompt = f"""Analyze the sentiment of the following text and provide a sentiment score between -1 and 1, where:
+- -1.0 to -0.6 = Very Negative
+- -0.6 to -0.2 = Negative  
+- -0.2 to 0.2 = Neutral
+- 0.2 to 0.6 = Positive
+- 0.6 to 1.0 = Very Positive
+
+Text: "{request.text}"
+
+Respond with ONLY a JSON object in this exact format:
+{{"sentiment": <number between -1 and 1>}}
+
+Do not include any other text, only the JSON object."""
+
+            # Call Groq API
+            response = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": "You are a sentiment analysis expert. Always respond with valid JSON only."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=50
+            )
+            
+            # Parse the response
+            response_text = response.choices[0].message.content.strip()
+            print(f"Groq response: {response_text}")
+            
+            # Extract JSON from response (handle cases where there might be extra text)
+            import json
+            # Try to find JSON in the response
+            try:
+                # Remove markdown code blocks if present
+                if "```json" in response_text:
+                    response_text = response_text.split("```json")[1].split("```")[0].strip()
+                elif "```" in response_text:
+                    response_text = response_text.split("```")[1].split("```")[0].strip()
+                
+                result = json.loads(response_text)
+                sentiment = float(result.get("sentiment", 0.0))
+                
+                # Clamp sentiment to -1 to 1 range
+                sentiment = max(-1.0, min(1.0, sentiment))
+                
+            except json.JSONDecodeError:
+                # If JSON parsing fails, try to extract number from response
+                import re
+                numbers = re.findall(r'-?\d+\.?\d*', response_text)
+                if numbers:
+                    sentiment = float(numbers[0])
+                    sentiment = max(-1.0, min(1.0, sentiment))
+                else:
+                    raise ValueError(f"Could not parse sentiment from response: {response_text}")
+            
             break  # Success, exit retry loop
             
-        except (httpx.HTTPStatusError, httpx.TimeoutException, httpx.RequestError, Exception) as e:
+        except Exception as e:
             last_error = e
             error_msg = str(e)
             
@@ -324,7 +384,8 @@ async def process_text(request: ProcessTextRequest):
                 "timeout" in error_msg.lower() or
                 "503" in error_msg or
                 "502" in error_msg or
-                "500" in error_msg
+                "500" in error_msg or
+                "rate limit" in error_msg.lower()
             )
             
             if is_retryable and attempt < max_retries - 1:
@@ -336,77 +397,14 @@ async def process_text(request: ProcessTextRequest):
             else:
                 # Not retryable or out of retries
                 print(f"Error in process_text (attempt {attempt + 1}/{max_retries}): {type(e).__name__}: {error_msg}")
+                if attempt == max_retries - 1:
+                    raise HTTPException(
+                        status_code=503,
+                        detail=f"Groq API error after {max_retries} attempts: {error_msg}"
+                    )
                 raise
     
-    if result is None:
-        # All retries failed
-        error_msg = str(last_error) if last_error else "Unknown error"
-        print(f"All {max_retries} attempts failed. Last error: {error_msg}")
-        raise HTTPException(
-            status_code=503,
-            detail=f"Hugging Face API unavailable after {max_retries} attempts. Please try again later."
-        )
-    
     try:
-        print(f"Result: {result}")
-        print(f"Result type: {type(result)}")
-        
-        # Handle the new API response format
-        # The new API returns a list of dictionaries with 'label' and 'score' keys
-        if isinstance(result, list) and len(result) > 0:
-            # Find the label with the highest score (most confident prediction)
-            if isinstance(result[0], dict):
-                # New API format: list of dicts with 'label' and 'score'
-                best_result = max(result, key=lambda x: x.get('score', 0))
-                label = best_result.get('label', '').upper()
-                score = best_result.get('score', 0)
-            elif hasattr(result[0], 'label') and hasattr(result[0], 'score'):
-                # Old InferenceClient format: objects with label and score attributes
-                best_result = max(result, key=lambda x: x.score if hasattr(x, 'score') else 0)
-                label = best_result.label.upper() if hasattr(best_result, 'label') else str(best_result).upper()
-                score = best_result.score if hasattr(best_result, 'score') else 0
-            else:
-                # Fallback: try to extract from string representation
-                best_result = max(result, key=lambda x: x.get('score', 0) if isinstance(x, dict) else 0)
-                label = str(best_result).upper()
-                score = 0.5
-            
-            # Convert label to sentiment score (-1 to 1) with 5 categories
-            # Using confidence score to determine intensity:
-            # - High confidence (>0.85) = Very Positive/Negative (0.6-1.0 or -0.6 to -1.0)
-            # - Medium confidence (0.7-0.85) = Positive/Negative (0.2-0.6 or -0.2 to -0.6)
-            # - Low confidence (<0.7) = Neutral (-0.2 to 0.2)
-            if 'NEGATIVE' in label:
-                if score > 0.85:
-                    # Very Negative: map to -1.0 to -0.6
-                    # Score 0.85-1.0 maps to -0.6 to -1.0
-                    sentiment = -0.6 - (score - 0.85) * 2.67  # Scale from -0.6 to -1.0
-                elif score > 0.7:
-                    # Negative: map to -0.6 to -0.2
-                    # Score 0.7-0.85 maps to -0.2 to -0.6
-                    sentiment = -0.2 - (score - 0.7) * 2.67  # Scale from -0.2 to -0.6
-                else:
-                    # Low confidence negative, closer to neutral: map to -0.2 to 0
-                    sentiment = -score * 0.29  # Scale down weak negatives
-            elif 'POSITIVE' in label:
-                if score > 0.85:
-                    # Very Positive: map to 0.6 to 1.0
-                    # Score 0.85-1.0 maps to 0.6 to 1.0
-                    sentiment = 0.6 + (score - 0.85) * 2.67  # Scale from 0.6 to 1.0
-                elif score > 0.7:
-                    # Positive: map to 0.2 to 0.6
-                    # Score 0.7-0.85 maps to 0.2 to 0.6
-                    sentiment = 0.2 + (score - 0.7) * 2.67  # Scale from 0.2 to 0.6
-                else:
-                    # Low confidence positive, closer to neutral: map to 0 to 0.2
-                    sentiment = score * 0.29  # Scale down weak positives
-            else:  # NEUTRAL or unknown label
-                # Neutral sentiment: close to 0
-                sentiment = 0.0
-        else:
-            # Fallback if result format is unexpected
-            sentiment = 0.0
-        
         # Ensure sentiment is in range [-1, 1]
         sentiment = max(-1.0, min(1.0, sentiment))
         

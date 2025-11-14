@@ -1,11 +1,11 @@
 # Sentiment Aura Backend
 
-FastAPI backend for the Sentiment Aura application. Provides real-time speech transcription via Deepgram WebSocket proxy and text processing with sentiment analysis and keyword extraction using Hugging Face models.
+FastAPI backend for the Sentiment Aura application. Provides real-time speech transcription via Deepgram WebSocket proxy and text processing with sentiment analysis using Groq API and keyword extraction.
 
 ## Features
 
 - **Real-time Speech Transcription**: WebSocket proxy to Deepgram API for live audio transcription
-- **Sentiment Analysis**: Uses Hugging Face DistilBERT model to analyze text sentiment (-1 to 1 scale)
+- **Sentiment Analysis**: Uses Groq API (Llama 3.3 70B) to analyze text sentiment (-1 to 1 scale)
 - **Keyword Extraction**: Extracts meaningful keywords from transcribed text
 - **CORS Enabled**: Configured to work with frontend applications
 - **Error Handling**: Retry logic with exponential backoff for API calls
@@ -32,12 +32,14 @@ Create a `.env` file in the backend directory with the following variables:
 
 ```env
 DEEPGRAM_API_KEY=your_deepgram_api_key_here
-HUGGINGFACE_API_KEY=your_huggingface_api_key_here
+GROQ_API_KEY=your_groq_api_key_here
 ```
 
 **Getting API Keys:**
 - **Deepgram**: Sign up at https://console.deepgram.com/ and get your API key
-- **Hugging Face**: Sign up at https://huggingface.co/ and create an access token at https://huggingface.co/settings/tokens
+- **Groq**: Sign up at https://console.groq.com/ and create an API key at https://console.groq.com/keys
+
+**Note:** Hugging Face support has been replaced with Groq API for sentiment analysis. The Hugging Face code is kept commented in the source for reference.
 
 ### 3. Running the Server
 
@@ -167,7 +169,7 @@ const ws = new WebSocket('ws://localhost:4000/ws/deepgram');
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DEEPGRAM_API_KEY` | Yes | Your Deepgram API key for speech transcription |
-| `HUGGINGFACE_API_KEY` | Yes | Your Hugging Face API token for sentiment analysis |
+| `GROQ_API_KEY` | Yes | Your Groq API key for sentiment analysis |
 
 ## Dependencies
 
@@ -175,7 +177,7 @@ const ws = new WebSocket('ws://localhost:4000/ws/deepgram');
 - **uvicorn**: ASGI server for running FastAPI
 - **python-dotenv**: Loading environment variables
 - **websockets**: WebSocket client library for Deepgram connection
-- **huggingface-hub**: Hugging Face Inference API client
+- **groq**: Groq API client for sentiment analysis
 - **httpx**: HTTP client for API requests
 - **pydantic**: Data validation using Python type annotations
 
@@ -186,7 +188,7 @@ Frontend (React)
     ↓
 Backend (FastAPI)
     ├── WebSocket Proxy → Deepgram API (Speech Transcription)
-    └── HTTP Endpoints → Hugging Face API (Sentiment Analysis)
+    └── HTTP Endpoints → Groq API (Sentiment Analysis)
 ```
 
 ## CORS Configuration
